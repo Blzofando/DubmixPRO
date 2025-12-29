@@ -19,7 +19,6 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
     log: 'Aguardando início...'
   });
 
-  // Função para editar texto manualmente
   const updateSegmentText = (id: number, newText: string) => {
     setSegments(prev => prev.map(s => s.id === id ? { ...s, text: newText } : s));
   };
@@ -36,9 +35,11 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
     setProcessingState({ stage, progress, log });
   };
 
-  // Função unificada para continuar o processo (Dublagem + Montagem)
+  // Função interna que faz o trabalho pesado
   const runDubbingAndAssembly = async (currentSegments: SubtitleSegment[]) => {
     try {
+      if (!openAIKey) throw new Error("Chave OpenAI não encontrada. Salve novamente.");
+
       updateStatus('dubbing', 45, 'Iniciando Dublagem (OpenAI)...');
       const audioSegments: ArrayBuffer[] = [];
       
@@ -48,11 +49,12 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
         
         updateStatus('dubbing', progress, `Dublando bloco ${i+1}/${currentSegments.length}...`);
         
-        const audioBuffer = await generateSpeechOpenAI(openAIKey!, seg.text);
+        const audioBuffer = await generateSpeechOpenAI(openAIKey, seg.text);
         audioSegments.push(audioBuffer);
 
+        // Pequeno delay para evitar rate limit
         if (i < currentSegments.length - 1) {
-          await new Promise(r => setTimeout(r, 1500)); // Delay de segurança
+          await new Promise(r => setTimeout(r, 1000));
         }
       }
 
@@ -78,26 +80,21 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
       setSegments([]); 
       setFinalAudioUrl(null);
 
-      // 1. Extração
       updateStatus('transcribing', 5, 'Extraindo áudio...');
       const audioBlob = await extractAudioFromVideo(videoFile);
 
-      // 2. Transcrição
       updateStatus('transcribing', 15, 'Transcrevendo (Gemini)...');
       const transcriptSegments = await transcribeAudio(apiKey, audioBlob);
       
-      // 3. Tradução
       updateStatus('translating', 30, 'Traduzindo (Gemini)...');
       const translatedSegments = await translateWithIsochrony(apiKey, transcriptSegments);
       setSegments(translatedSegments);
 
-      // DECISÃO: Se for manual, PAUSA aqui. Se for auto, CONTINUA.
       if (mode === 'manual') {
         updateStatus('waiting_for_approval', 40, 'Aguardando revisão do usuário...');
-        return; // Para a execução aqui
+        return;
       }
 
-      // Se for auto, segue direto
       await runDubbingAndAssembly(translatedSegments);
 
     } catch (error: any) {
@@ -106,8 +103,17 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  // Esta é a função chamada pelo botão "CONFIRMAR E DUBLAR"
   const resumeProcessing = async () => {
-    // Chamado quando o usuário clica em "Confirmar e Dublar"
+    console.log("Retomando processamento...");
+    
+    // Verificação de segurança
+    if (!openAIKey) {
+      alert("Erro: Chave da OpenAI sumiu. Por favor, recarregue a página e insira as chaves novamente.");
+      return;
+    }
+    
+    // Usa os segmentos atuais (que podem ter sido editados)
     await runDubbingAndAssembly(segments);
   };
 
@@ -119,10 +125,10 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
       videoUrl,
       processingState,
       startProcessing,
-      resumeProcessing, // Exposta
+      resumeProcessing, // Agora está protegido e logado
       finalAudioUrl,
       segments,
-      updateSegmentText // Exposta
+      updateSegmentText
     }}>
       {children}
     </ProjectContext.Provider>
