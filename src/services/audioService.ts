@@ -15,18 +15,31 @@ const loadFFmpeg = async () => {
   return ffmpeg;
 };
 
-// Filtro de velocidade (atempo)
-const getAtempoFilter = (factor: number): string => {
-  if (isNaN(factor) || !isFinite(factor) || factor <= 0) return "atempo=1.0";
-  if (Math.abs(factor - 1.0) < 0.01) return "atempo=1.0"; 
+// --- HELPER: Filtro de velocidade Inteligente ---
+const getSpeedFilter = (sourceDuration: number, targetDuration: number): string => {
+  // Se o áudio é MAIOR que o espaço (ex: 10s audio em 5s slot) -> Acelera (Speed > 1)
+  // Se o áudio é MENOR que o espaço (ex: 2s audio em 10s slot) -> NÃO MEXE (Speed = 1). Não queremos slow motion!
+  
+  let speedFactor = sourceDuration / targetDuration;
+
+  // TRAVA DE SEGURANÇA:
+  // Se o áudio for menor que o slot, speedFactor será < 1 (ex: 0.2).
+  // Forçamos para 1.0 para não ter voz de robô lento.
+  if (speedFactor < 1.0) speedFactor = 1.0;
+
+  // Se precisar acelerar muito (mais de 2x), limitamos a 2.5x para não ficar ininteligível
+  // (Vai cortar o final, mas é melhor que ficar parecendo um esquilo irreconhecível)
+  if (speedFactor > 2.5) speedFactor = 2.5;
+
+  // Formata o filtro atempo do FFmpeg (limite 0.5 a 2.0 por filtro)
+  if (Math.abs(speedFactor - 1.0) < 0.05) return "atempo=1.0"; 
 
   let filters = [];
-  let remaining = factor;
+  let remaining = speedFactor;
   
   while (remaining > 2.0) { filters.push("atempo=2.0"); remaining /= 2.0; }
-  while (remaining < 0.5) { filters.push("atempo=0.5"); remaining /= 0.5; }
-  
   filters.push(`atempo=${remaining.toFixed(4)}`);
+  
   return filters.join(',');
 };
 
@@ -55,7 +68,7 @@ export const assembleFinalAudio = async (
 ): Promise<Blob> => {
   const ffmpeg = await loadFFmpeg();
   
-  // Limpa ambiente
+  // Limpa ambiente anterior
   try { await ffmpeg.deleteFile('output.mp3'); } catch {}
 
   let filterComplex = "";
@@ -63,52 +76,34 @@ export const assembleFinalAudio = async (
   let validCount = 0;
 
   for (let i = 0; i < segments.length; i++) {
-    // 1. Validação básica
+    // 1. Validação
     if (!audioBuffers[i] || audioBuffers[i].byteLength === 0) continue;
 
     const seg = segments[i];
-    const durationOriginal = seg.endTime - seg.startTime;
-    const targetDuration = Math.max(0.1, durationOriginal);
-
-    // 2. Escreve o áudio RAW (com silêncio) no disco virtual
-    const rawName = `raw_${i}.mp3`;
-    const cleanName = `clean_${i}.mp3`;
+    const durationSlot = seg.endTime - seg.startTime;
     
+    // Proteção contra slots minúsculos
+    const targetDuration = Math.max(0.2, durationSlot);
+
+    // 2. Salva o áudio original
+    const rawName = `seg_${i}.mp3`;
     await ffmpeg.writeFile(rawName, new Uint8Array(audioBuffers[i].slice(0)));
 
-    // 3. REMOVE SILÊNCIO (O Pulo do Gato 🐱)
-    try {
-        await ffmpeg.exec([
-            '-y', '-i', rawName, 
-            '-af', 'silenceremove=start_periods=1:start_threshold=-50dB:stop_periods=1:stop_threshold=-50dB:stop_duration=0.1', 
-            cleanName
-        ]);
-    } catch (e) {
-        console.warn(`Falha ao limpar silêncio do seg ${i}, usando raw.`);
-        await ffmpeg.exec(['-y', '-i', rawName, cleanName]); 
-    }
+    // 3. Verifica duração real
+    const ttsDuration = await getAudioDuration(audioBuffers[i].slice(0));
+    if (ttsDuration === 0) continue;
 
-    // 4. Lê o áudio LIMPO para calcular a duração real da fala
-    const cleanData = await ffmpeg.readFile(cleanName);
-    
-    // --- CORREÇÃO DO ERRO DE BUILD AQUI ---
-    // Forçamos o TypeScript a entender que isso é um ArrayBuffer padrão
-    const cleanBuffer = (cleanData as Uint8Array).buffer as ArrayBuffer;
-    
-    const speechDuration = await getAudioDuration(cleanBuffer);
+    // 4. Calcula velocidade (SEM SLOW MOTION)
+    const atempoCmd = getSpeedFilter(ttsDuration, targetDuration);
 
-    if (speechDuration === 0) continue;
+    inputsStr += `-i ${rawName} `;
 
-    // 5. Calcula velocidade baseada na FALA REAL vs TEMPO DISPONÍVEL
-    const speedFactor = speechDuration / targetDuration;
-    const atempoCmd = getAtempoFilter(speedFactor);
-    
-    // Adiciona o arquivo LIMPO à lista de inputs
-    inputsStr += `-i ${cleanName} `;
-
-    // 6. Monta o filtro de mixagem
+    // 5. Monta o filtro:
+    // [in] -> atempo (ajuste velocidade) -> apad (segurança fim) -> adelay (posicionamento)
+    // 'apad' adiciona um pouquinho de silêncio no final para o corte não ser brusco
     const delayMs = Math.floor(seg.startTime * 1000);
-    filterComplex += `[${validCount}:a]${atempoCmd},adelay=${delayMs}|${delayMs}[a${validCount}];`;
+    
+    filterComplex += `[${validCount}:a]${atempoCmd},apad=pad_dur=0.1,adelay=${delayMs}|${delayMs}[a${validCount}];`;
     
     validCount++;
   }
@@ -116,14 +111,17 @@ export const assembleFinalAudio = async (
   if (validCount === 0) throw new Error("Nenhum áudio válido gerado.");
 
   // Mixagem final
+  // dropout_transition=1000 ajuda a suavizar a entrada de outros audios
   let mixInputs = "";
   for(let i=0; i<validCount; i++) mixInputs += `[a${i}]`;
-  filterComplex += `${mixInputs}amix=inputs=${validCount}:dropout_transition=0:normalize=0[out]`;
+  filterComplex += `${mixInputs}amix=inputs=${validCount}:dropout_transition=1000:normalize=0[out]`;
 
+  // Executa
   await ffmpeg.exec([
     ...inputsStr.trim().split(' '),
     '-filter_complex', filterComplex,
     '-map', '[out]',
+    '-ac', '2', // Garante stereo
     'output.mp3'
   ]);
 
