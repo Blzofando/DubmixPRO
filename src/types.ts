@@ -8,7 +8,6 @@ export interface SubtitleSegment {
 }
 
 export interface ProcessingState {
-  // ADICIONADO: 'waiting_for_approval'
   stage: 'idle' | 'transcribing' | 'translating' | 'waiting_for_approval' | 'dubbing' | 'assembling' | 'completed' | 'error';
   progress: number;
   log: string;
@@ -23,9 +22,12 @@ export interface ProjectContextType {
   setVideoFile: (file: File | null) => void;
   videoUrl: string | null;
   processingState: ProcessingState;
-  startProcessing: (mode: 'auto' | 'manual') => Promise<void>; // Mudou assinatura
-  resumeProcessing: () => Promise<void>; // Nova função para continuar após edição
+  startProcessing: (mode: 'auto' | 'manual') => Promise<void>;
+  
+  // MUDANÇA AQUI: Agora recebe os segmentos atualizados como parâmetro
+  resumeProcessing: (freshSegments: SubtitleSegment[]) => Promise<void>; 
+  
   finalAudioUrl: string | null;
   segments: SubtitleSegment[]; 
-  updateSegmentText: (id: number, newText: string) => void; // Nova função para editar
+  updateSegmentText: (id: number, newText: string) => void;
 }
