@@ -102,7 +102,7 @@ export const generateSpeechOpenAI = async (openAIKey: string, text: string): Pro
   const url = 'https://api.openai.com/v1/audio/speech';
   
   const payload = {
-    model: "tts-1",
+    model: "gpt-4o-mini-tts-2025-03-20",
     input: text,
     voice: "onyx", // Opções: alloy, echo, fable, onyx, nova, shimmer
     response_format: "mp3"
