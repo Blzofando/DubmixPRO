@@ -8,21 +8,24 @@ export interface SubtitleSegment {
 }
 
 export interface ProcessingState {
-  stage: 'idle' | 'transcribing' | 'translating' | 'dubbing' | 'assembling' | 'completed' | 'error';
+  // ADICIONADO: 'waiting_for_approval'
+  stage: 'idle' | 'transcribing' | 'translating' | 'waiting_for_approval' | 'dubbing' | 'assembling' | 'completed' | 'error';
   progress: number;
   log: string;
 }
 
 export interface ProjectContextType {
-  apiKey: string | null; // Gemini Key
+  apiKey: string | null;
   setApiKey: (key: string) => void;
-  openAIKey: string | null; // NOVA: OpenAI Key
+  openAIKey: string | null;
   setOpenAIKey: (key: string) => void;
   videoFile: File | null;
   setVideoFile: (file: File | null) => void;
   videoUrl: string | null;
   processingState: ProcessingState;
-  startProcessing: () => Promise<void>;
+  startProcessing: (mode: 'auto' | 'manual') => Promise<void>; // Mudou assinatura
+  resumeProcessing: () => Promise<void>; // Nova função para continuar após edição
   finalAudioUrl: string | null;
   segments: SubtitleSegment[]; 
+  updateSegmentText: (id: number, newText: string) => void; // Nova função para editar
 }
