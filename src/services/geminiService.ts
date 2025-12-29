@@ -196,3 +196,4 @@ export const generateSpeechOpenAI = async (openAIKey: string, text: string): Pro
     return new ArrayBuffer(0); // Retorna mudo se tudo falhar
   }
 };
+};
