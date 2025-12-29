@@ -10,6 +10,8 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [finalAudioUrl, setFinalAudioUrl] = useState<string | null>(null);
+  const [segments, setSegments] = useState<SubtitleSegment[]>([]); // NOVO
+  
   const [processingState, setProcessingState] = useState<ProcessingState>({
     stage: 'idle',
     progress: 0,
@@ -30,39 +32,46 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
 
   const startProcessing = async () => {
     if (!apiKey || !videoFile) {
-      alert("API Key e Arquivo de Vídeo são obrigatórios.");
+      alert("API Key e Arquivo são obrigatórios.");
       return;
     }
 
     try {
-      // 1. Extração de Áudio (FFmpeg)
-      updateStatus('transcribing', 10, 'Extraindo áudio do vídeo...');
+      setSegments([]); // Limpa lista anterior
+      setFinalAudioUrl(null);
+
+      // 1. Extração
+      updateStatus('transcribing', 10, 'Extraindo áudio...');
       const audioBlob = await extractAudioFromVideo(videoFile);
 
-      // 2. Transcrição (Gemini)
-      updateStatus('transcribing', 25, 'Transcrevendo áudio com Gemini 2.5...');
+      // 2. Transcrição
+      updateStatus('transcribing', 25, 'Transcrevendo (Gemini)...');
       const transcriptSegments = await transcribeAudio(apiKey, audioBlob);
+      setSegments(transcriptSegments); // MOSTRA NA TELA
 
-      // 3. Tradução Isocrônica (Gemini)
-      updateStatus('translating', 40, 'Realizando tradução isocrônica...');
+      // 3. Tradução
+      updateStatus('translating', 40, 'Traduzindo e ajustando tempo...');
       const translatedSegments = await translateWithIsochrony(apiKey, transcriptSegments);
+      setSegments(translatedSegments); // ATUALIZA PARA PORTUGUÊS NA TELA
 
-      // 4. Dublagem TTS (Gemini)
-      updateStatus('dubbing', 60, 'Gerando vozes sintéticas...');
+      // 4. Dublagem
+      updateStatus('dubbing', 50, 'Iniciando Dublagem...');
       const audioSegments: ArrayBuffer[] = [];
       
       for (let i = 0; i < translatedSegments.length; i++) {
         const seg = translatedSegments[i];
-        updateStatus('dubbing', 60 + Math.floor((i / translatedSegments.length) * 20), `Dublando segmento ${i + 1}/${translatedSegments.length}...`);
+        // Mostra qual frase está sendo dublada agora
+        updateStatus('dubbing', 50 + Math.floor((i / translatedSegments.length) * 40), `Dublando: "${seg.text.substring(0, 20)}..."`);
         
-        // Calcular duração alvo
-        const targetDuration = seg.endTime - seg.startTime;
+        // Pequena pausa para não bloquear o navegador
+        await new Promise(r => setTimeout(r, 100));
+
         const audioBuffer = await generateSpeech(apiKey, seg.text);
         audioSegments.push(audioBuffer);
       }
 
-      // 5. Montagem Final (FFmpeg)
-      updateStatus('assembling', 90, 'Montando áudio final e ajustando tempo...');
+      // 5. Montagem
+      updateStatus('assembling', 95, 'Montando áudio final...');
       const finalBlob = await assembleFinalAudio(translatedSegments, audioSegments);
       
       const finalUrl = URL.createObjectURL(finalBlob);
@@ -82,7 +91,8 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
       videoUrl,
       processingState,
       startProcessing,
-      finalAudioUrl
+      finalAudioUrl,
+      segments // Exportando para usar no painel
     }}>
       {children}
     </ProjectContext.Provider>
