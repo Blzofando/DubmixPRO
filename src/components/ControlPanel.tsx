@@ -17,7 +17,8 @@ export const ControlPanel = () => {
           <span className="text-slate-400 uppercase">{processingState.stage}</span>
           <span className="text-blue-400">{processingState.progress}%</span>
         </div>
-        <p className="text-green-400">> {processingState.log}</p>
+        {/* A CORREÇÃO FOI FEITA NA LINHA ABAIXO: {' > '} */}
+        <p className="text-green-400">{' > '} {processingState.log}</p>
         {processingState.stage === 'error' && (
              <p className="text-red-500 mt-2">Verifique sua API Key ou tente um vídeo menor.</p>
         )}
