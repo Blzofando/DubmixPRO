@@ -37,7 +37,6 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
   };
 
   // --- ENGINE CENTRAL DE DUBLAGEM ---
-  // Agora aceita 'segmentsToProcess' explicitamente
   const runDubbingAndAssembly = async (segmentsToProcess: SubtitleSegment[]) => {
     try {
       if (!openAIKey) throw new Error("Chave OpenAI não encontrada.");
@@ -48,7 +47,6 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
       for (let i = 0; i < segmentsToProcess.length; i++) {
         const seg = segmentsToProcess[i];
         
-        // Log de segurança
         console.log(`Processando bloco ${i}:`, seg.text);
 
         if (!seg.text || !seg.text.trim()) {
@@ -71,7 +69,7 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
         if (i < segmentsToProcess.length - 1) await new Promise(r => setTimeout(r, 800));
       }
 
-      updateStatus('assembling', 95, 'Ajustando tempo (Isocronia Force)...');
+      updateStatus('assembling', 95, 'Removendo silêncio e ajustando tempo...');
       const finalBlob = await assembleFinalAudio(segmentsToProcess, audioSegments);
       
       const finalUrl = URL.createObjectURL(finalBlob);
@@ -106,13 +104,10 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
       setSegments(translatedSegments);
 
       if (mode === 'manual') {
-        // PAUSA AQUI E NÃO FAZ MAIS NADA
-        // O estado fica 'waiting_for_approval'
         updateStatus('waiting_for_approval', 40, 'Aguardando revisão...');
         return;
       }
 
-      // Se for auto, segue com o que tem
       await runDubbingAndAssembly(translatedSegments);
 
     } catch (error: any) {
@@ -121,15 +116,12 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  // --- NOVA FUNÇÃO BLINDADA ---
-  // Ela recebe os dados frescos direto do botão
   const resumeProcessing = async (freshSegments: SubtitleSegment[]) => {
     console.log("Retomando com dados frescos:", freshSegments.length, "segmentos");
     if (!freshSegments || freshSegments.length === 0) {
         alert("Erro: Nenhum texto encontrado para dublar.");
         return;
     }
-    // Chama a engine passando os dados que vieram do clique
     await runDubbingAndAssembly(freshSegments);
   };
 
@@ -141,7 +133,7 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
       videoUrl,
       processingState,
       startProcessing,
-      resumeProcessing, // Nova versão
+      resumeProcessing, 
       finalAudioUrl,
       segments,
       updateSegmentText
