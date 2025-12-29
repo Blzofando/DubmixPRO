@@ -2,8 +2,8 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { SubtitleSegment } from "../types";
 
 // MODELOS
-const MODEL_LOGIC = 'gemini-2.0-flash-exp'; // Trocamos para o 2.0 Flash Exp (mais estável que o 2.5 pra lógica agora)
-const MODEL_TTS = 'gemini-2.0-flash-exp';   // Vamos tentar usar o mesmo para tudo ou fallback
+const MODEL_LOGIC = 'gemini-2.5-flash'; // Trocamos para o 2.0 Flash Exp (mais estável que o 2.5 pra lógica agora)
+const MODEL_TTS = 'gemini-2.5-flash-preview-tts';   // Vamos tentar usar o mesmo para tudo ou fallback
 
 export const transcribeAudio = async (apiKey: string, audioBlob: Blob): Promise<SubtitleSegment[]> => {
   const genAI = new GoogleGenerativeAI(apiKey);
