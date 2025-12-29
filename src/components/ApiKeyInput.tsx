@@ -1,35 +1,62 @@
 import React, { useState } from 'react';
 import { useProject } from '../contexts/ProjectContext';
-import { Key } from 'lucide-react';
+import { Key, Bot, Mic } from 'lucide-react';
 
 export const ApiKeyInput = () => {
-  const { apiKey, setApiKey } = useProject();
-  const [inputVal, setInputVal] = useState('');
+  const { apiKey, setApiKey, openAIKey, setOpenAIKey } = useProject();
+  const [geminiVal, setGeminiVal] = useState('');
+  const [openAIVal, setOpenAIVal] = useState('');
 
-  if (apiKey) return null; // Esconde se já salvou
+  // Só esconde se TIVER AS DUAS chaves salvas
+  if (apiKey && openAIKey) return null;
+
+  const handleSave = () => {
+    if (geminiVal) setApiKey(geminiVal);
+    if (openAIVal) setOpenAIKey(openAIVal);
+  };
 
   return (
     <div className="bg-slate-800 p-4 rounded-lg border border-slate-700 mb-6">
-      <div className="flex items-center gap-2 mb-2 text-yellow-400">
+      <div className="flex items-center gap-2 mb-4 text-yellow-400">
         <Key size={20} />
-        <h3 className="font-bold">Configuração Obrigatória</h3>
+        <h3 className="font-bold">Configuração das APIs</h3>
       </div>
-      <p className="text-sm text-slate-400 mb-3">
-        Insira sua Google Gemini API Key. Ela será salva apenas na memória do navegador.
-      </p>
-      <div className="flex gap-2">
-        <input 
-          type="password" 
-          value={inputVal}
-          onChange={(e) => setInputVal(e.target.value)}
-          placeholder="AIzaSy..."
-          className="flex-1 bg-slate-900 border border-slate-700 rounded p-2 text-white"
-        />
+      
+      <div className="space-y-4">
+        {/* Gemini Input */}
+        <div>
+          <label className="flex items-center gap-2 text-xs text-slate-400 mb-1">
+            <Bot size={14} /> Gemini API Key (Transcrição/Tradução)
+          </label>
+          <input 
+            type="password" 
+            value={geminiVal}
+            onChange={(e) => setGeminiVal(e.target.value)}
+            placeholder="AIzaSy..."
+            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+          />
+        </div>
+
+        {/* OpenAI Input */}
+        <div>
+          <label className="flex items-center gap-2 text-xs text-slate-400 mb-1">
+            <Mic size={14} /> OpenAI API Key (Voz/TTS)
+          </label>
+          <input 
+            type="password" 
+            value={openAIVal}
+            onChange={(e) => setOpenAIVal(e.target.value)}
+            placeholder="sk-..."
+            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+          />
+        </div>
+
         <button 
-          onClick={() => setApiKey(inputVal)}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded font-bold"
+          onClick={handleSave}
+          disabled={!geminiVal || !openAIVal}
+          className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-700 text-white p-2 rounded font-bold transition-colors"
         >
-          Salvar
+          Salvar Chaves
         </button>
       </div>
     </div>
