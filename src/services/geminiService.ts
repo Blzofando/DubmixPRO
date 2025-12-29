@@ -3,8 +3,8 @@ import { SubtitleSegment } from "../types";
 
 const MODEL_LOGIC = 'gemini-2.5-flash';
 
-// Modelo solicitado: gpt-4o-mini-tts-2025-03-20
-const OPENAI_TTS_MODEL_PREFERRED = 'gpt-4o-mini-tts-2025-03-20';
+// Modelo solicitado pelo usuário via print/Python snippet
+const OPENAI_TTS_MODEL_PREFERRED = 'gpt-4o-mini-tts'; 
 const OPENAI_TTS_MODEL_FALLBACK = 'tts-1';
 
 // --- HELPER: Limpeza de JSON ---
@@ -37,7 +37,7 @@ function parseTimestamp(timeStr: string): number {
   return 0;
 }
 
-// --- 1. TRANSCRIÇÃO (PROMPT COMPLETO) ---
+// --- 1. TRANSCRIÇÃO (MANTIDO PROMPT ROBUSTO) ---
 export const transcribeAudio = async (apiKey: string, audioBlob: Blob): Promise<SubtitleSegment[]> => {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: MODEL_LOGIC });
@@ -50,15 +50,11 @@ export const transcribeAudio = async (apiKey: string, audioBlob: Blob): Promise<
 
   const prompt = `
   Você é um especialista em transcrição de áudio para legendagem profissional.
-  
-  TAREFA:
-  Analise o áudio e gere uma transcrição segmentada com timestamps precisos.
-  
-  REGRAS RÍGIDAS DE FORMATO:
+  TAREFA: Analise o áudio e gere uma transcrição segmentada com timestamps precisos.
+  REGRAS:
   1. Retorne APENAS um JSON válido.
   2. Estrutura: [{ "id": number, "start": "MM:SS.mmm", "end": "MM:SS.mmm", "text": "transcrição" }]
   3. Use PONTO (.) para milissegundos (ex: 00:05.500).
-  4. Segmente as falas de forma natural.
   `;
 
   try {
@@ -80,7 +76,7 @@ export const transcribeAudio = async (apiKey: string, audioBlob: Blob): Promise<
   }
 };
 
-// --- 2. TRADUÇÃO ISOCRÔNICA (PROMPT COMPLETO & RESTAURADO) ---
+// --- 2. TRADUÇÃO ISOCRÔNICA (COM CONTAGEM DE CARACTERES) ---
 export const translateWithIsochrony = async (apiKey: string, segments: SubtitleSegment[]): Promise<SubtitleSegment[]> => {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: MODEL_LOGIC });
@@ -90,38 +86,28 @@ export const translateWithIsochrony = async (apiKey: string, segments: SubtitleS
     id: s.id, 
     text: s.text,
     duration: (s.endTime - s.startTime).toFixed(2) + "s",
-    originalCharCount: s.text.length // A META DE TAMANHO
+    originalCharCount: s.text.length // META DE TAMANHO
   }));
 
   const prompt = `
-  Você é um especialista em Dublagem, Tradução e Localização para Português Brasileiro (PT-BR).
+  Você é um especialista em Dublagem e Localização para PT-BR.
+  OBJETIVO: Traduzir respeitando a ISOCRONIA VISUAL (Tamanho) e TEMPORAL (Duração).
   
-  OBJETIVO:
-  Traduzir as legendas respeitando rigorosamente a ISOCRONIA VISUAL (Tamanho) e TEMPORAL (Duração).
+  ENTRADA: ${JSON.stringify(enrichedInput)}
   
-  ENTRADA (JSON):
-  ${JSON.stringify(enrichedInput)}
+  REGRAS DE DUBLAGEM:
+  1. A tradução DEVE ter APROXIMADAMENTE O MESMO NÚMERO DE CARACTERES do original (+/- 8 chars).
+  2. Adapte criativamente (sinônimos, gírias leves) para caber na meta.
+  3. O texto deve caber no tempo indicado em "duration".
+  4. NÃO MESCLE FRASES. Saída 1:1.
   
-  REGRAS DE OURO (SINCRONIA LABIAL):
-  1. A tradução DEVE ter APROXIMADAMENTE O MESMO NÚMERO DE CARACTERES do original ("originalCharCount").
-  2. TOLERÂNCIA: É aceitável variar entre 6 a 8 caracteres para mais ou para menos, mas evite desvios maiores.
-  3. Adapte criativamente: Use sinônimos curtos, gírias adequadas ou reestruture a frase para bater a meta de caracteres.
-  4. NÃO perca o contexto da cena ou o sentido da frase original ao encurtar.
-  
-  REGRAS DE TEMPO:
-  1. O texto também deve ser "falável" dentro do tempo indicado em "duration".
-  
-  REGRAS TÉCNICAS (CRÍTICO):
-  1. NÃO MESCLE FRASES. Se entrarem ${segments.length} linhas, devem sair ${segments.length} linhas.
-  2. Mantenha os IDs correspondentes (1 para 1).
-  3. Retorne APENAS o JSON de saída: [{ "id": number, "text": "texto ajustado" }]
+  SAÍDA: JSON [{ "id": number, "text": "texto ajustado" }]
   `;
 
   try {
     const result = await model.generateContent(prompt);
     const transArray = cleanAndParseJSON(result.response.text());
     
-    // Validação de Segurança
     if (!Array.isArray(transArray) || transArray.length !== segments.length) {
       console.warn("A IA não respeitou a quantidade de linhas. Usando fallback.");
       return segments;
@@ -137,23 +123,32 @@ export const translateWithIsochrony = async (apiKey: string, segments: SubtitleS
   }
 };
 
-// --- 3. DUBLAGEM (OPENAI COM FALLBACK) ---
+// --- 3. DUBLAGEM (OPENAI GPT-4o-MINI-TTS) ---
 export const generateSpeechOpenAI = async (openAIKey: string, text: string): Promise<ArrayBuffer> => {
   if (!text || !text.trim()) return new ArrayBuffer(0);
 
+  // Função interna para tentar um modelo específico
   const tryModel = async (modelName: string) => {
+    
+    const payload: any = {
+      model: modelName,
+      input: text,
+      voice: "marin", // VOZ SOLICITADA
+      response_format: "mp3"
+    };
+
+    // Adiciona instruções apenas se for o modelo novo (gpt-4o), pois tts-1 pode não suportar
+    if (modelName.includes('gpt-4o')) {
+       payload.instructions = "Fale com entonação natural, fluida e expressiva em Português Brasileiro, adequada para dublagem de filmes.";
+    }
+
     const response = await fetch('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${openAIKey}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        model: modelName,
-        input: text,
-        voice: "onyx", 
-        response_format: "mp3"
-      })
+      body: JSON.stringify(payload)
     });
 
     if (!response.ok) {
@@ -164,10 +159,12 @@ export const generateSpeechOpenAI = async (openAIKey: string, text: string): Pro
   };
 
   try {
+    // Tenta primeiro o modelo GPT-4o-mini-tts com a voz Marin
     try {
       return await tryModel(OPENAI_TTS_MODEL_PREFERRED);
     } catch (e) {
-      console.warn(`Modelo preferido falhou. Tentando fallback para ${OPENAI_TTS_MODEL_FALLBACK}.`, e);
+      console.warn(`Modelo ${OPENAI_TTS_MODEL_PREFERRED} falhou. Tentando fallback para ${OPENAI_TTS_MODEL_FALLBACK}.`, e);
+      // Se falhar, tenta o tts-1 clássico (também com marin)
       return await tryModel(OPENAI_TTS_MODEL_FALLBACK);
     }
   } catch (finalError: any) {
