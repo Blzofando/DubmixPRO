@@ -77,9 +77,6 @@ export const assembleFinalAudio = async (
     await ffmpeg.writeFile(rawName, new Uint8Array(audioBuffers[i].slice(0)));
 
     // 3. REMOVE SILÊNCIO (O Pulo do Gato 🐱)
-    // start_periods=1: remove silêncio do início
-    // stop_periods=1: remove silêncio do fim
-    // threshold=-50dB: sensibilidade do que é silêncio
     try {
         await ffmpeg.exec([
             '-y', '-i', rawName, 
@@ -88,13 +85,16 @@ export const assembleFinalAudio = async (
         ]);
     } catch (e) {
         console.warn(`Falha ao limpar silêncio do seg ${i}, usando raw.`);
-        // Fallback: se falhar a limpeza, copia o raw para o clean
         await ffmpeg.exec(['-y', '-i', rawName, cleanName]); 
     }
 
     // 4. Lê o áudio LIMPO para calcular a duração real da fala
     const cleanData = await ffmpeg.readFile(cleanName);
-    const cleanBuffer = (cleanData as Uint8Array).buffer;
+    
+    // --- CORREÇÃO DO ERRO DE BUILD AQUI ---
+    // Forçamos o TypeScript a entender que isso é um ArrayBuffer padrão
+    const cleanBuffer = (cleanData as Uint8Array).buffer as ArrayBuffer;
+    
     const speechDuration = await getAudioDuration(cleanBuffer);
 
     if (speechDuration === 0) continue;
@@ -130,4 +130,3 @@ export const assembleFinalAudio = async (
   const data = await ffmpeg.readFile('output.mp3');
   return new Blob([data as any], { type: 'audio/mp3' });
 };
-
