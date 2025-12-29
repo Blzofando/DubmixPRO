@@ -14,14 +14,15 @@ export interface ProcessingState {
 }
 
 export interface ProjectContextType {
-  apiKey: string | null;
+  apiKey: string | null; // Gemini Key
   setApiKey: (key: string) => void;
+  openAIKey: string | null; // NOVA: OpenAI Key
+  setOpenAIKey: (key: string) => void;
   videoFile: File | null;
   setVideoFile: (file: File | null) => void;
   videoUrl: string | null;
   processingState: ProcessingState;
   startProcessing: () => Promise<void>;
   finalAudioUrl: string | null;
-  // NOVO: Lista de segmentos para mostrar na tela
   segments: SubtitleSegment[]; 
 }
