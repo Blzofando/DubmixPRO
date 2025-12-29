@@ -19,6 +19,11 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
     log: 'Aguardando início...'
   });
 
+  // Função para editar texto manualmente
+  const updateSegmentText = (id: number, newText: string) => {
+    setSegments(prev => prev.map(s => s.id === id ? { ...s, text: newText } : s));
+  };
+
   useEffect(() => {
     if (videoFile) {
       const url = URL.createObjectURL(videoFile);
@@ -31,7 +36,39 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
     setProcessingState({ stage, progress, log });
   };
 
-  const startProcessing = async () => {
+  // Função unificada para continuar o processo (Dublagem + Montagem)
+  const runDubbingAndAssembly = async (currentSegments: SubtitleSegment[]) => {
+    try {
+      updateStatus('dubbing', 45, 'Iniciando Dublagem (OpenAI)...');
+      const audioSegments: ArrayBuffer[] = [];
+      
+      for (let i = 0; i < currentSegments.length; i++) {
+        const seg = currentSegments[i];
+        const progress = 45 + Math.floor((i / currentSegments.length) * 45);
+        
+        updateStatus('dubbing', progress, `Dublando bloco ${i+1}/${currentSegments.length}...`);
+        
+        const audioBuffer = await generateSpeechOpenAI(openAIKey!, seg.text);
+        audioSegments.push(audioBuffer);
+
+        if (i < currentSegments.length - 1) {
+          await new Promise(r => setTimeout(r, 1500)); // Delay de segurança
+        }
+      }
+
+      updateStatus('assembling', 95, 'Sincronizando áudio final...');
+      const finalBlob = await assembleFinalAudio(currentSegments, audioSegments);
+      
+      const finalUrl = URL.createObjectURL(finalBlob);
+      setFinalAudioUrl(finalUrl);
+      updateStatus('completed', 100, 'Processamento concluído!');
+    } catch (error: any) {
+      console.error(error);
+      updateStatus('error', 0, `Erro: ${error.message}`);
+    }
+  };
+
+  const startProcessing = async (mode: 'auto' | 'manual') => {
     if (!apiKey || !openAIKey || !videoFile) {
       alert("Preencha as duas API Keys e escolha um vídeo.");
       return;
@@ -45,50 +82,33 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
       updateStatus('transcribing', 5, 'Extraindo áudio...');
       const audioBlob = await extractAudioFromVideo(videoFile);
 
-      // 2. Transcrição (Gemini)
+      // 2. Transcrição
       updateStatus('transcribing', 15, 'Transcrevendo (Gemini)...');
       const transcriptSegments = await transcribeAudio(apiKey, audioBlob);
-      setSegments(transcriptSegments);
-
-      // 3. Tradução (Gemini)
+      
+      // 3. Tradução
       updateStatus('translating', 30, 'Traduzindo (Gemini)...');
       const translatedSegments = await translateWithIsochrony(apiKey, transcriptSegments);
       setSegments(translatedSegments);
 
-      // 4. Dublagem (OpenAI)
-      updateStatus('dubbing', 45, 'Iniciando Dublagem (OpenAI)...');
-      const audioSegments: ArrayBuffer[] = [];
-      
-      // Processamento Sequencial com Delay (Segurança contra Rate Limit)
-      for (let i = 0; i < translatedSegments.length; i++) {
-        const seg = translatedSegments[i];
-        const progress = 45 + Math.floor((i / translatedSegments.length) * 45);
-        
-        updateStatus('dubbing', progress, `Dublando bloco ${i+1}/${translatedSegments.length}...`);
-        
-        // Chamada OpenAI
-        const audioBuffer = await generateSpeechOpenAI(openAIKey, seg.text);
-        audioSegments.push(audioBuffer);
-
-        // DELAY DE 2 SEGUNDOS (Solicitado pelo usuário)
-        // Isso evita estourar o limite de requisições por minuto
-        if (i < translatedSegments.length - 1) {
-          await new Promise(r => setTimeout(r, 2000));
-        }
+      // DECISÃO: Se for manual, PAUSA aqui. Se for auto, CONTINUA.
+      if (mode === 'manual') {
+        updateStatus('waiting_for_approval', 40, 'Aguardando revisão do usuário...');
+        return; // Para a execução aqui
       }
 
-      // 5. Montagem
-      updateStatus('assembling', 95, 'Sincronizando áudio final...');
-      const finalBlob = await assembleFinalAudio(translatedSegments, audioSegments);
-      
-      const finalUrl = URL.createObjectURL(finalBlob);
-      setFinalAudioUrl(finalUrl);
-      updateStatus('completed', 100, 'Processamento concluído!');
+      // Se for auto, segue direto
+      await runDubbingAndAssembly(translatedSegments);
 
     } catch (error: any) {
       console.error(error);
       updateStatus('error', 0, `Erro: ${error.message}`);
     }
+  };
+
+  const resumeProcessing = async () => {
+    // Chamado quando o usuário clica em "Confirmar e Dublar"
+    await runDubbingAndAssembly(segments);
   };
 
   return (
@@ -99,8 +119,10 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
       videoUrl,
       processingState,
       startProcessing,
+      resumeProcessing, // Exposta
       finalAudioUrl,
-      segments
+      segments,
+      updateSegmentText // Exposta
     }}>
       {children}
     </ProjectContext.Provider>
