@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, ReactNode, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
 import { ProjectContextType, ProcessingState, SubtitleSegment } from '../types';
 import { transcribeAudio, translateWithIsochrony, generateSpeechOpenAI } from '../services/geminiService';
 import { extractAudioFromVideo, assembleFinalAudio } from '../services/audioService';
@@ -12,22 +12,13 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [finalAudioUrl, setFinalAudioUrl] = useState<string | null>(null);
   
-  // STATE VISUAL
   const [segments, setSegments] = useState<SubtitleSegment[]>([]);
   
-  // REF DE SEGURANÇA (Para o botão Confirmar nunca ler dados velhos)
-  const segmentsRef = useRef<SubtitleSegment[]>([]);
-
   const [processingState, setProcessingState] = useState<ProcessingState>({
     stage: 'idle',
     progress: 0,
     log: 'Aguardando início...'
   });
-
-  // Sincroniza o Ref sempre que o State mudar (Edição Manual)
-  useEffect(() => {
-    segmentsRef.current = segments;
-  }, [segments]);
 
   const updateSegmentText = (id: number, newText: string) => {
     setSegments(prev => prev.map(s => s.id === id ? { ...s, text: newText } : s));
@@ -45,43 +36,43 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
     setProcessingState({ stage, progress, log });
   };
 
-  // --- ENGINE DE DUBLAGEM ---
-  const runDubbingAndAssembly = async (currentSegments: SubtitleSegment[]) => {
+  // --- ENGINE CENTRAL DE DUBLAGEM ---
+  // Agora aceita 'segmentsToProcess' explicitamente
+  const runDubbingAndAssembly = async (segmentsToProcess: SubtitleSegment[]) => {
     try {
       if (!openAIKey) throw new Error("Chave OpenAI não encontrada.");
 
       updateStatus('dubbing', 45, 'Iniciando Dublagem (OpenAI)...');
       const audioSegments: ArrayBuffer[] = [];
       
-      // Usa os segmentos passados (que vieram do Ref atualizado)
-      for (let i = 0; i < currentSegments.length; i++) {
-        const seg = currentSegments[i];
+      for (let i = 0; i < segmentsToProcess.length; i++) {
+        const seg = segmentsToProcess[i];
         
-        // Pula segmentos vazios para não dar erro
-        if (!seg.text.trim()) {
+        // Log de segurança
+        console.log(`Processando bloco ${i}:`, seg.text);
+
+        if (!seg.text || !seg.text.trim()) {
              audioSegments.push(new ArrayBuffer(0));
              continue;
         }
 
-        const progress = 45 + Math.floor((i / currentSegments.length) * 45);
-        updateStatus('dubbing', progress, `Dublando bloco ${i+1}/${currentSegments.length}...`);
+        const progress = 45 + Math.floor((i / segmentsToProcess.length) * 45);
+        updateStatus('dubbing', progress, `Dublando bloco ${i+1}/${segmentsToProcess.length}...`);
         
         try {
             const audioBuffer = await generateSpeechOpenAI(openAIKey, seg.text);
             audioSegments.push(audioBuffer);
         } catch (e) {
             console.error(`Erro no bloco ${i}, pulando:`, e);
-            audioSegments.push(new ArrayBuffer(0)); // Insere silêncio para não quebrar a ordem
+            audioSegments.push(new ArrayBuffer(0));
         }
 
-        // Delay anti-bloqueio (Rate Limit)
-        if (i < currentSegments.length - 1) await new Promise(r => setTimeout(r, 800));
+        // Delay anti-bloqueio
+        if (i < segmentsToProcess.length - 1) await new Promise(r => setTimeout(r, 800));
       }
 
       updateStatus('assembling', 95, 'Ajustando tempo (Isocronia Force)...');
-      
-      // Manda para o FFmpeg ajustar a velocidade
-      const finalBlob = await assembleFinalAudio(currentSegments, audioSegments);
+      const finalBlob = await assembleFinalAudio(segmentsToProcess, audioSegments);
       
       const finalUrl = URL.createObjectURL(finalBlob);
       setFinalAudioUrl(finalUrl);
@@ -101,7 +92,6 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
 
     try {
       setSegments([]); 
-      segmentsRef.current = []; // Limpa ref
       setFinalAudioUrl(null);
 
       updateStatus('transcribing', 5, 'Extraindo áudio...');
@@ -113,14 +103,16 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
       updateStatus('translating', 30, 'Traduzindo (Gemini)...');
       const translatedSegments = await translateWithIsochrony(apiKey, transcriptSegments);
       
-      setSegments(translatedSegments); // Atualiza visual
-      segmentsRef.current = translatedSegments; // Atualiza lógica
+      setSegments(translatedSegments);
 
       if (mode === 'manual') {
+        // PAUSA AQUI E NÃO FAZ MAIS NADA
+        // O estado fica 'waiting_for_approval'
         updateStatus('waiting_for_approval', 40, 'Aguardando revisão...');
         return;
       }
 
+      // Se for auto, segue com o que tem
       await runDubbingAndAssembly(translatedSegments);
 
     } catch (error: any) {
@@ -129,17 +121,16 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  const resumeProcessing = async () => {
-    console.log("Botão clicado! Usando dados do Ref...");
-    // PEGA DO REF PARA GARANTIR QUE É A VERSÃO MAIS NOVA (PÓS-EDIÇÃO)
-    const finalSegments = segmentsRef.current;
-    
-    if (finalSegments.length === 0) {
-        alert("Erro: Nenhum segmento encontrado.");
+  // --- NOVA FUNÇÃO BLINDADA ---
+  // Ela recebe os dados frescos direto do botão
+  const resumeProcessing = async (freshSegments: SubtitleSegment[]) => {
+    console.log("Retomando com dados frescos:", freshSegments.length, "segmentos");
+    if (!freshSegments || freshSegments.length === 0) {
+        alert("Erro: Nenhum texto encontrado para dublar.");
         return;
     }
-    
-    await runDubbingAndAssembly(finalSegments);
+    // Chama a engine passando os dados que vieram do clique
+    await runDubbingAndAssembly(freshSegments);
   };
 
   return (
@@ -150,7 +141,7 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
       videoUrl,
       processingState,
       startProcessing,
-      resumeProcessing,
+      resumeProcessing, // Nova versão
       finalAudioUrl,
       segments,
       updateSegmentText
