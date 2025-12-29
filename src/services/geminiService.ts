@@ -1,23 +1,16 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { SubtitleSegment } from "../types";
 
-// --- SEUS MODELOS ---
 const MODEL_LOGIC = 'gemini-2.5-flash';
-const MODEL_TTS_PREFERRED = 'gemini-2.5-flash-preview-tts';
-const MODEL_TTS_FALLBACK = 'gemini-2.0-flash-exp';
 
-// --- HELPER JSON ---
+// Helper para limpar JSON sujo da IA
 function cleanAndParseJSON(text: string): any {
   const clean = text.replace(/```json/g, '').replace(/```/g, '').trim();
-  try {
-    return JSON.parse(clean);
-  } catch (e) {
-    console.error("ERRO JSON BRUTO:", text);
-    throw new Error("Formato inválido da IA.");
-  }
+  try { return JSON.parse(clean); } 
+  catch (e) { throw new Error("Erro no formato JSON da IA."); }
 }
 
-// --- 1. TRANSCRIÇÃO ---
+// --- 1. TRANSCRIÇÃO (GEMINI) ---
 export const transcribeAudio = async (apiKey: string, audioBlob: Blob): Promise<SubtitleSegment[]> => {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: MODEL_LOGIC });
@@ -28,107 +21,115 @@ export const transcribeAudio = async (apiKey: string, audioBlob: Blob): Promise<
     reader.readAsDataURL(audioBlob);
   });
 
-  const prompt = `Analise o áudio. Retorne JSON: [{ "id": number, "start": "HH:MM:SS.mmm", "end": "HH:MM:SS.mmm", "text": "texto" }]`;
+  const prompt = `
+  Analise o áudio com precisão extrema.
+  Tarefa: Gerar legendas para dublagem.
+  
+  REGRAS CRÍTICAS:
+  1. Retorne APENAS um JSON válido: [{ "id": number, "start": "HH:MM:SS.mmm", "end": "HH:MM:SS.mmm", "text": "transcrição exata" }]
+  2. Segmente bem as frases (evite blocos gigantes).
+  3. Sem markdown, sem explicações.
+  `;
 
   try {
     const result = await model.generateContent([prompt, { inlineData: { data: base64Audio, mimeType: "audio/mp3" } }]);
     const raw = cleanAndParseJSON(result.response.text());
     const arr = Array.isArray(raw) ? raw : [raw];
-    return arr.map((s:any) => ({ ...s, startTime: parseTimestamp(s.start), endTime: parseTimestamp(s.end) }));
+    
+    return arr.map((s:any) => ({ 
+      ...s, 
+      startTime: parseTimestamp(s.start), 
+      endTime: parseTimestamp(s.end) 
+    }));
   } catch (e: any) {
     throw new Error(`Transcrição falhou: ${e.message}`);
   }
 };
 
-// --- 2. TRADUÇÃO ---
+// --- 2. TRADUÇÃO ISOCRÔNICA (GEMINI) - AGORA COM O PROMPT CORRETO ---
 export const translateWithIsochrony = async (apiKey: string, segments: SubtitleSegment[]): Promise<SubtitleSegment[]> => {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: MODEL_LOGIC });
 
-  // Input simplificado
-  const simpleInput = segments.map(s => ({ id: s.id, text: s.text }));
+  // Envia ID, Texto e a DURAÇÃO para a IA saber o tempo disponível
+  const enrichedInput = segments.map(s => ({ 
+    id: s.id, 
+    text: s.text,
+    duration: (s.endTime - s.startTime).toFixed(2) + "s" // Informa o tempo disponível
+  }));
 
   const prompt = `
-  Traduza para PT-BR.
-  Entrada: ${JSON.stringify(simpleInput)}
-  Saída: Array JSON idêntico em tamanho.
-  REGRAS: NÃO MESCLE FRASES. Mantenha 1:1.
+  Você é um especialista em Dublagem e Localização (PT-BR).
+  Tarefa: Traduzir o texto respeitando a ISOCRONIA (Tempo de fala).
+  
+  Entrada: ${JSON.stringify(enrichedInput)}
+  
+  REGRAS DE DUBLAGEM (IMPORTANTE):
+  1. O texto traduzido deve caber no tempo de duração ("duration") indicado.
+  2. Se o tempo for curto, sintetize a ideia. Se for longo, pode ser mais descritivo.
+  3. Use linguagem natural falada no Brasil (PT-BR).
+  
+  REGRAS TÉCNICAS (OBRIGATÓRIO):
+  1. NÃO MESCLE FRASES. Se entrarem ${segments.length} itens, devem sair EXATAMENTE ${segments.length}.
+  2. Mantenha os IDs correspondentes.
+  3. Saída: Array JSON [{ "id": number, "text": "tradução adaptada" }]
   `;
 
   try {
     const result = await model.generateContent(prompt);
-    const translations = cleanAndParseJSON(result.response.text());
-    const transArray = Array.isArray(translations) ? translations : [translations];
-
-    if (transArray.length !== segments.length) {
-      console.warn("IA mesclou blocos. Usando original.");
+    const transArray = cleanAndParseJSON(result.response.text());
+    
+    // Validação de Segurança
+    if (!Array.isArray(transArray) || transArray.length !== segments.length) {
+      console.warn("A IA não respeitou a quantidade de linhas. Usando fallback (texto original).");
       return segments;
     }
+
     return segments.map(seg => {
       const t = transArray.find((x:any) => x.id === seg.id);
       return { ...seg, text: t ? t.text : seg.text };
     });
-  } catch (e) {
-    return segments; // Fallback para original
+  } catch (e) { 
+    console.error("Erro na tradução:", e);
+    return segments; // Retorna original se falhar
   }
 };
 
-// --- 3. DUBLAGEM (SISTEMA DE 3 CAMADAS) ---
-export const generateSpeech = async (apiKey: string, text: string): Promise<ArrayBuffer> => {
+// --- 3. DUBLAGEM (OPENAI) ---
+export const generateSpeechOpenAI = async (openAIKey: string, text: string): Promise<ArrayBuffer> => {
   if (!text || !text.trim()) return new ArrayBuffer(0);
 
-  // TENTATIVA 1: Modelo Preferido (2.5)
-  try {
-    const audio = await tryGeminiTTS(apiKey, MODEL_TTS_PREFERRED, text);
-    if (audio.byteLength > 0) return audio;
-  } catch (e) { console.warn(`Falha no TTS 2.5:`, e); }
-
-  // TENTATIVA 2: Modelo Estável (2.0 Flash Exp)
-  try {
-    const audio = await tryGeminiTTS(apiKey, MODEL_TTS_FALLBACK, text);
-    if (audio.byteLength > 0) return audio;
-  } catch (e) { console.warn(`Falha no TTS 2.0:`, e); }
-
-  // TENTATIVA 3: Failsafe (Google Translate Hack - GARANTIA DE ÁUDIO)
-  // Divide em pedaços se for muito grande para não dar erro de URL
-  try {
-    console.log("Usando Fallback Google Translate...");
-    const encoded = encodeURIComponent(text.slice(0, 200)); // Corta seguro
-    const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=pt&client=tw-ob&q=${encoded}`;
-    const resp = await fetch(url);
-    if (resp.ok) return await resp.arrayBuffer();
-  } catch (e) { console.error("Failsafe falhou:", e); }
-
-  return new ArrayBuffer(0); // Só retorna vazio se o mundo acabar
-};
-
-// Função genérica para chamar o Gemini TTS
-async function tryGeminiTTS(apiKey: string, model: string, text: string): Promise<ArrayBuffer> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const url = 'https://api.openai.com/v1/audio/speech';
+  
   const payload = {
-    contents: [{ parts: [{ text: `Leia em português: "${text}"` }] }],
-    generationConfig: { responseModalities: ["AUDIO"] }
+    model: "tts-1",
+    input: text,
+    voice: "onyx", // Opções: alloy, echo, fable, onyx, nova, shimmer
+    response_format: "mp3"
   };
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${openAIKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
 
-  if (!response.ok) throw new Error(`API Error ${response.status}`);
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`OpenAI Error: ${errorData.error?.message || response.statusText}`);
+    }
 
-  const data = await response.json();
-  const base64 = data.candidates?.[0]?.content?.parts?.find((p:any) => p.inlineData)?.inlineData?.data;
-  
-  if (base64) {
-    const binary = window.atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes.buffer;
+    return await response.arrayBuffer();
+
+  } catch (e: any) {
+    console.error("Falha na Dublagem OpenAI:", e);
+    return new ArrayBuffer(0); 
   }
-  throw new Error("Sem áudio na resposta");
-}
+};
 
 function parseTimestamp(timeStr: string): number {
   if(!timeStr) return 0;
