@@ -3,14 +3,55 @@ import { SubtitleSegment } from "../types";
 
 const MODEL_LOGIC = 'gemini-2.5-flash';
 
-// Helper para limpar JSON sujo da IA
+// Modelo solicitado: gpt-4o-mini-tts-2025-03-20
+// Nota: Se este modelo específico falhar na API pública, o código tentará o 'tts-1' automaticamente.
+const OPENAI_TTS_MODEL_PREFERRED = 'gpt-4o-mini-tts-2025-03-20';
+const OPENAI_TTS_MODEL_FALLBACK = 'tts-1';
+
+// --- HELPER: Limpeza de JSON ---
 function cleanAndParseJSON(text: string): any {
   const clean = text.replace(/```json/g, '').replace(/```/g, '').trim();
   try { return JSON.parse(clean); } 
-  catch (e) { throw new Error("Erro no formato JSON da IA."); }
+  catch (e) { throw new Error("Erro no formato JSON retornado pela IA."); }
 }
 
-// --- 1. TRANSCRIÇÃO (GEMINI) ---
+// --- HELPER: Correção de Timestamp (RESOLVE O BUG DE 1 HORA) ---
+function parseTimestamp(timeStr: string): number {
+  if (!timeStr) return 0;
+
+  // Limpeza de caracteres estranhos
+  let clean = timeStr.replace(/[\[\]]/g, '').trim();
+  clean = clean.replace(',', '.'); // Aceita padrão europeu
+
+  const parts = clean.split(':');
+
+  // Caso Problemático: "01:45:558" (Onde 558 deveria ser ms, mas usaram :)
+  if (parts.length === 3) {
+    const p1 = parseFloat(parts[0]);
+    const p2 = parseFloat(parts[1]);
+    const p3 = parseFloat(parts[2]);
+
+    // LÓGICA INTELIGENTE:
+    // Se o terceiro número for >= 60 (ex: 148, 558), ele é milissegundo, não segundo!
+    // Ou se o terceiro bloco não tiver ponto decimal.
+    if (p3 >= 60 || !parts[2].includes('.')) {
+      // Formato inferido: Minuto : Segundo : Milissegundo
+      return (p1 * 60) + p2 + (p3 / 1000);
+    } else {
+      // Formato padrão: Hora : Minuto : Segundo.ms
+      return (p1 * 3600) + (p2 * 60) + p3;
+    }
+  }
+
+  // Caso Simples: "01:45" (Minuto : Segundo)
+  if (parts.length === 2) {
+    return (parseFloat(parts[0]) * 60) + parseFloat(parts[1]);
+  }
+
+  return 0;
+}
+
+// --- 1. TRANSCRIÇÃO (PROMPT COMPLETO) ---
 export const transcribeAudio = async (apiKey: string, audioBlob: Blob): Promise<SubtitleSegment[]> => {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: MODEL_LOGIC });
@@ -22,17 +63,32 @@ export const transcribeAudio = async (apiKey: string, audioBlob: Blob): Promise<
   });
 
   const prompt = `
-  Analise o áudio com precisão extrema.
-  Tarefa: Gerar legendas para dublagem.
+  Você é um especialista em transcrição de áudio para legendagem.
   
-  REGRAS CRÍTICAS:
-  1. Retorne APENAS um JSON válido: [{ "id": number, "start": "HH:MM:SS.mmm", "end": "HH:MM:SS.mmm", "text": "transcrição exata" }]
-  2. Segmente bem as frases (evite blocos gigantes).
-  3. Sem markdown, sem explicações.
+  TAREFA:
+  Analise o áudio fornecido e gere uma transcrição segmentada com timestamps precisos.
+  
+  REGRAS RÍGIDAS DE FORMATO:
+  1. Retorne APENAS um JSON válido. Não inclua markdown, aspas no início ou explicações.
+  2. Estrutura do JSON: 
+     [
+       { 
+         "id": number, 
+         "start": "MM:SS.mmm", 
+         "end": "MM:SS.mmm", 
+         "text": "transcrição exata do que foi dito" 
+       }
+     ]
+  3. Para os timestamps, use o formato com PONTO para milissegundos (ex: 00:05.500) para evitar ambiguidades.
+  4. Segmente as falas de forma natural (por sentença ou pausa respiratória).
   `;
 
   try {
-    const result = await model.generateContent([prompt, { inlineData: { data: base64Audio, mimeType: "audio/mp3" } }]);
+    const result = await model.generateContent([
+      prompt, 
+      { inlineData: { data: base64Audio, mimeType: "audio/mp3" } }
+    ]);
+    
     const raw = cleanAndParseJSON(result.response.text());
     const arr = Array.isArray(raw) ? raw : [raw];
     
@@ -42,46 +98,50 @@ export const transcribeAudio = async (apiKey: string, audioBlob: Blob): Promise<
       endTime: parseTimestamp(s.end) 
     }));
   } catch (e: any) {
-    throw new Error(`Transcrição falhou: ${e.message}`);
+    throw new Error(`Falha na Transcrição: ${e.message}`);
   }
 };
 
-// --- 2. TRADUÇÃO ISOCRÔNICA (GEMINI) - AGORA COM O PROMPT CORRETO ---
+// --- 2. TRADUÇÃO ISOCRÔNICA (PROMPT COMPLETO) ---
 export const translateWithIsochrony = async (apiKey: string, segments: SubtitleSegment[]): Promise<SubtitleSegment[]> => {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: MODEL_LOGIC });
 
-  // Envia ID, Texto e a DURAÇÃO para a IA saber o tempo disponível
+  // Prepara o input informando a duração disponível para cada frase
   const enrichedInput = segments.map(s => ({ 
     id: s.id, 
     text: s.text,
-    duration: (s.endTime - s.startTime).toFixed(2) + "s" // Informa o tempo disponível
+    duration: (s.endTime - s.startTime).toFixed(2) + "s" // Duração calculada
   }));
 
   const prompt = `
-  Você é um especialista em Dublagem e Localização (PT-BR).
-  Tarefa: Traduzir o texto respeitando a ISOCRONIA (Tempo de fala).
+  Você é um especialista em Dublagem, Tradução e Localização para Português Brasileiro (PT-BR).
   
-  Entrada: ${JSON.stringify(enrichedInput)}
+  OBJETIVO:
+  Traduzir as legendas abaixo respeitando rigorosamente a ISOCRONIA (tempo de fala disponível).
   
-  REGRAS DE DUBLAGEM (IMPORTANTE):
-  1. O texto traduzido deve caber no tempo de duração ("duration") indicado.
-  2. Se o tempo for curto, sintetize a ideia. Se for longo, pode ser mais descritivo.
-  3. Use linguagem natural falada no Brasil (PT-BR).
+  ENTRADA (JSON):
+  ${JSON.stringify(enrichedInput)}
   
-  REGRAS TÉCNICAS (OBRIGATÓRIO):
-  1. NÃO MESCLE FRASES. Se entrarem ${segments.length} itens, devem sair EXATAMENTE ${segments.length}.
-  2. Mantenha os IDs correspondentes.
-  3. Saída: Array JSON [{ "id": number, "text": "tradução adaptada" }]
+  DIRETRIZES DE DUBLAGEM:
+  1. O texto traduzido DEVE caber no tempo indicado no campo "duration".
+  2. Se a "duration" for curta, sintetize e resuma a ideia. Seja direto.
+  3. Se a "duration" for longa, você pode ser mais descritivo para preencher o tempo.
+  4. Use linguagem natural, coloquial e fluida do Brasil. Evite traduções literais robóticas.
+  
+  REGRAS TÉCNICAS (CRÍTICO):
+  1. NÃO MESCLE FRASES. A quantidade de itens de saída deve ser EXATAMENTE igual à de entrada.
+  2. Mantenha os IDs correspondentes (1 para 1).
+  3. Retorne APENAS o JSON de saída: [{ "id": number, "text": "texto traduzido" }]
   `;
 
   try {
     const result = await model.generateContent(prompt);
     const transArray = cleanAndParseJSON(result.response.text());
     
-    // Validação de Segurança
+    // Validação de Segurança: Se a IA mesclar linhas, usamos o original para não travar
     if (!Array.isArray(transArray) || transArray.length !== segments.length) {
-      console.warn("A IA não respeitou a quantidade de linhas. Usando fallback (texto original).");
+      console.warn("A IA não respeitou a quantidade de linhas (mesclou ou alucinou). Usando fallback.");
       return segments;
     }
 
@@ -91,7 +151,7 @@ export const translateWithIsochrony = async (apiKey: string, segments: SubtitleS
     });
   } catch (e) { 
     console.error("Erro na tradução:", e);
-    return segments; // Retorna original se falhar
+    return segments; 
   }
 };
 
@@ -99,41 +159,40 @@ export const translateWithIsochrony = async (apiKey: string, segments: SubtitleS
 export const generateSpeechOpenAI = async (openAIKey: string, text: string): Promise<ArrayBuffer> => {
   if (!text || !text.trim()) return new ArrayBuffer(0);
 
-  const url = 'https://api.openai.com/v1/audio/speech';
-  
-  const payload = {
-    model: "gpt-4o-mini-tts-2025-03-20",
-    input: text,
-    voice: "onyx", // Opções: alloy, echo, fable, onyx, nova, shimmer
-    response_format: "mp3"
-  };
-
-  try {
-    const response = await fetch(url, {
+  // Função interna para tentar um modelo específico
+  const tryModel = async (modelName: string) => {
+    const response = await fetch('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${openAIKey}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        model: modelName,
+        input: text,
+        voice: "onyx", // onyx, alloy, echo, fable, nova, shimmer
+        response_format: "mp3"
+      })
     });
 
     if (!response.ok) {
       const errorData = await response.json();
-      throw new Error(`OpenAI Error: ${errorData.error?.message || response.statusText}`);
+      throw new Error(errorData.error?.message || response.statusText);
     }
-
     return await response.arrayBuffer();
+  };
 
-  } catch (e: any) {
-    console.error("Falha na Dublagem OpenAI:", e);
-    return new ArrayBuffer(0); 
+  try {
+    // Tenta primeiro o modelo solicitado pelo usuário
+    try {
+      return await tryModel(OPENAI_TTS_MODEL_PREFERRED);
+    } catch (e) {
+      console.warn(`Modelo ${OPENAI_TTS_MODEL_PREFERRED} falhou ou não existe. Tentando fallback para ${OPENAI_TTS_MODEL_FALLBACK}.`, e);
+      // Se falhar (ex: modelo não existe), tenta o padrão tts-1
+      return await tryModel(OPENAI_TTS_MODEL_FALLBACK);
+    }
+  } catch (finalError: any) {
+    console.error("Erro Fatal na Dublagem OpenAI:", finalError);
+    return new ArrayBuffer(0); // Retorna mudo se tudo falhar
   }
 };
-
-function parseTimestamp(timeStr: string): number {
-  if(!timeStr) return 0;
-  const [h, m, s] = timeStr.split(':');
-  const [sec, ms] = s.split('.');
-  return parseInt(h) * 3600 + parseInt(m) * 60 + parseInt(sec) + (parseInt(ms || '0') / 1000);
-}
