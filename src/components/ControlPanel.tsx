@@ -9,18 +9,20 @@ export const ControlPanel = () => {
     segments, updateSegmentText 
   } = useProject();
 
-  // Definições de estado para limpar o código
   const isProcessing = processingState.stage !== 'idle' && processingState.stage !== 'completed' && processingState.stage !== 'error' && processingState.stage !== 'waiting_for_approval';
   const isWaiting = processingState.stage === 'waiting_for_approval';
   const canStart = apiKey && openAIKey && videoFile && !isProcessing && !isWaiting;
 
-  // Função para garantir que o clique funcione
+  // FUNÇÃO DE CLIQUE BLINDADA
   const handleConfirm = () => {
-    console.log("Botão Confirmar Clicado!"); // Debug no console
+    console.log("Botão clicado! Enviando segmentos atuais...");
+    
+    // Passamos 'segments' (o estado atual da tela) para a função
+    // Isso garante que suas edições sejam usadas
     if (resumeProcessing) {
-        resumeProcessing();
+        resumeProcessing(segments);
     } else {
-        alert("Erro: Função de retomar não encontrada. Verifique se atualizou o ProjectContext.");
+        alert("Erro crítico: Contexto não atualizado. Recarregue a página.");
     }
   };
 
@@ -54,6 +56,7 @@ export const ControlPanel = () => {
                 <div key={seg.id} className={`flex flex-col gap-1 p-2 rounded ${isWaiting ? 'bg-slate-700/50 border border-blue-500/30' : 'bg-slate-800/50'}`}>
                    <div className="flex justify-between text-[10px] text-slate-400">
                       <span className="text-blue-400">[{seg.start}]</span>
+                      {/* Mostra Duração Alvo para você se guiar na edição */}
                       <span>{(seg.endTime - seg.startTime).toFixed(1)}s</span>
                    </div>
                    
@@ -79,9 +82,9 @@ export const ControlPanel = () => {
         {/* SE ESTIVER ESPERANDO APROVAÇÃO */}
         {isWaiting && (
            <button
-             type="button" // Importante para evitar submits acidentais
+             type="button"
              onClick={handleConfirm}
-             className="flex items-center justify-center gap-2 w-full py-4 rounded-lg font-bold text-lg bg-green-600 hover:bg-green-500 text-white shadow-lg shadow-green-900/50 animate-pulse cursor-pointer"
+             className="flex items-center justify-center gap-2 w-full py-4 rounded-lg font-bold text-lg bg-green-600 hover:bg-green-500 text-white shadow-lg shadow-green-900/50 animate-pulse cursor-pointer transition-transform active:scale-95"
            >
              <CheckCircle /> CONFIRMAR E DUBLAR
            </button>
