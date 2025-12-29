@@ -18,6 +18,11 @@ const loadFFmpeg = async () => {
   return ffmpeg;
 };
 
+// Função auxiliar para ler arquivo para Uint8Array
+const fetchFile = async (file: File): Promise<Uint8Array> => {
+  return new Uint8Array(await file.arrayBuffer());
+};
+
 export const extractAudioFromVideo = async (videoFile: File): Promise<Blob> => {
   const ffmpeg = await loadFFmpeg();
   await ffmpeg.writeFile('input_video', await fetchFile(videoFile));
@@ -26,12 +31,9 @@ export const extractAudioFromVideo = async (videoFile: File): Promise<Blob> => {
   await ffmpeg.exec(['-i', 'input_video', '-q:a', '0', '-map', 'a', 'audio.mp3']);
   
   const data = await ffmpeg.readFile('audio.mp3');
-  return new Blob([data], { type: 'audio/mp3' });
-};
-
-// Função auxiliar para ler arquivo para Uint8Array
-const fetchFile = async (file: File): Promise<Uint8Array> => {
-  return new Uint8Array(await file.arrayBuffer());
+  
+  // CORREÇÃO AQUI: [data as any] para evitar erro de SharedArrayBuffer
+  return new Blob([data as any], { type: 'audio/mp3' });
 };
 
 // Construtor de filtro 'atempo' encadeado para valores extremos
@@ -53,6 +55,12 @@ const getAtempoFilter = (factor: number): string => {
   filters.push(`atempo=${remaining}`);
   
   return filters.join(',');
+};
+
+const getAudioDuration = async (buffer: ArrayBuffer): Promise<number> => {
+  const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+  const decoded = await ctx.decodeAudioData(buffer.slice(0)); // slice para clonar
+  return decoded.duration;
 };
 
 export const assembleFinalAudio = async (
@@ -78,28 +86,15 @@ export const assembleFinalAudio = async (
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
     
-    // Obter duração do arquivo gerado pelo TTS (precisamos inspecionar ou assumir que o FFmpeg sabe)
-    // O problema: não sabemos a duração exata do ArrayBuffer aqui sem decodificar.
-    // Estratégia: O FFmpeg lerá o arquivo. Usaremos 'atempo' baseado na duração esperada?
-    // Correção: Para calcular o 'atempo', precisamos saber a duração do input TTS.
-    // Como não temos `ffprobe` facilmente aqui, vamos assumir que o TTS gera algo próximo
-    // e forçar o `atempo` baseado na duração DO SEGMENTO DE VÍDEO vs Duração estimada?
-    // Não. A melhor abordagem robusta sem ffprobe é complexa.
-    // ALTERNATIVA SEGURA: Vamos confiar no timestamp. 
-    // Porém, o prompt pediu `atempo` para corrigir bugs.
-    // Solução: Vamos aplicar o filtro de tempo. Para saber o fator, precisamos da duração do TTS.
-    // Vamos usar o contexto de áudio do navegador para pegar a duração antes de passar pro FFmpeg.
-    
+    // Obter duração real do áudio gerado
     const ttsDuration = await getAudioDuration(audioBuffers[i]);
     const targetDuration = seg.endTime - seg.startTime;
     
-    // Calcular fator de velocidade. 
-    // Se TTS tem 10s e alvo é 5s. Fator = 10/5 = 2.0 (Acelerar).
-    // Se TTS tem 2s e alvo é 4s. Fator = 2/4 = 0.5 (Desacelerar).
+    // Calcular fator de velocidade para encaixar no slot de tempo (correção bug iOS/Esquilo)
     const tempoFactor = ttsDuration / targetDuration;
     const atempoString = getAtempoFilter(tempoFactor);
     
-    // Delay em milissegundos
+    // Delay em milissegundos para posicionamento
     const delayMs = Math.floor(seg.startTime * 1000);
     
     // [i:a]atempo=X,adelay=Y|Y[a_i]
@@ -107,11 +102,10 @@ export const assembleFinalAudio = async (
   }
 
   // Mixar tudo
-  // Ex: [a0][a1][a2]amix=inputs=3:dropout_transition=0[out]
   let mixInputs = "";
   for(let i=0; i<segments.length; i++) mixInputs += `[a${i}]`;
   
-  // IMPORTANTE: normalize=0 para não baixar o volume quando houver sobreposição
+  // IMPORTANTE: normalize=0 para não baixar volume nas sobreposições
   filterComplex += `${mixInputs}amix=inputs=${segments.length}:dropout_transition=0:normalize=0[out]`;
 
   await ffmpeg.exec([
@@ -123,11 +117,8 @@ export const assembleFinalAudio = async (
   ]);
 
   const data = await ffmpeg.readFile('output.mp3');
-  return new Blob([data], { type: 'audio/mp3' });
+  
+  // CORREÇÃO AQUI: [data as any]
+  return new Blob([data as any], { type: 'audio/mp3' });
 };
 
-const getAudioDuration = async (buffer: ArrayBuffer): Promise<number> => {
-  const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-  const decoded = await ctx.decodeAudioData(buffer.slice(0)); // slice para clonar e não invalidar
-  return decoded.duration;
-};
