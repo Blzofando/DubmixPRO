@@ -1,15 +1,15 @@
 export interface SubtitleSegment {
   id: number;
-  start: string; // formato "HH:MM:SS,mmm" ou segundos string
+  start: string;
   end: string;
   text: string;
-  startTime: number; // segundos float
-  endTime: number;   // segundos float
+  startTime: number;
+  endTime: number;
 }
 
 export interface ProcessingState {
   stage: 'idle' | 'transcribing' | 'translating' | 'dubbing' | 'assembling' | 'completed' | 'error';
-  progress: number; // 0 a 100
+  progress: number;
   log: string;
 }
 
@@ -22,4 +22,6 @@ export interface ProjectContextType {
   processingState: ProcessingState;
   startProcessing: () => Promise<void>;
   finalAudioUrl: string | null;
+  // NOVO: Lista de segmentos para mostrar na tela
+  segments: SubtitleSegment[]; 
 }
