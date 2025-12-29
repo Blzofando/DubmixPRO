@@ -3,13 +3,15 @@ import { useProject } from '../contexts/ProjectContext';
 import { Upload as UploadIcon, FileAudio } from 'lucide-react';
 
 export const Upload = () => {
-  const { setVideoFile, videoUrl, processingState } = useProject();
+  // CORREÇÃO AQUI: Adicionei 'videoFile' na lista de imports
+  const { videoFile, setVideoFile, videoUrl, processingState } = useProject();
+  
   const isDisabled = processingState.stage !== 'idle' && processingState.stage !== 'completed' && processingState.stage !== 'error';
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      // Limite de segurança aumentado para evitar falsos positivos, mas avisa
+      // Limite de segurança (100MB)
       if (file.size > 100 * 1024 * 1024) {
         if (!confirm("O arquivo é maior que 100MB. Isso pode travar o navegador do celular. Deseja continuar mesmo assim?")) {
           return;
@@ -33,10 +35,6 @@ export const Upload = () => {
             <p className="text-xs text-gray-500 mt-1">Vídeos ou Áudios (MP3, WAV, M4A)</p>
           </div>
           
-          {/* CORREÇÃO CRÍTICA PARA IOS:
-             Adicionei as extensões explicitamente (.mp3, .wav, .m4a, .mp4, .mov).
-             O iOS Files muitas vezes ignora 'audio/*' mas aceita '.mp3'.
-          */}
           <input 
             type="file" 
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" 
@@ -47,8 +45,7 @@ export const Upload = () => {
         </div>
       ) : (
         <div className="bg-black rounded-lg overflow-hidden relative border border-slate-700 flex items-center justify-center p-4">
-           {/* Lógica para mostrar Ícone se for Áudio ou Player se for Vídeo */}
-           {/* Verifica se o NOME do arquivo ou o TIPO parece áudio */}
+           {/* Lógica segura para mostrar player de áudio ou vídeo */}
            {(videoUrl.match(/audio|mp3|wav|m4a/i) || (videoFile && videoFile.type.includes('audio'))) ? (
              <div className="text-center py-6 w-full">
                <FileAudio className="w-12 h-12 text-purple-400 mx-auto mb-3" />
