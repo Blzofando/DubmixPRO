@@ -9,9 +9,20 @@ export const ControlPanel = () => {
     segments, updateSegmentText 
   } = useProject();
 
+  // Definições de estado para limpar o código
   const isProcessing = processingState.stage !== 'idle' && processingState.stage !== 'completed' && processingState.stage !== 'error' && processingState.stage !== 'waiting_for_approval';
   const isWaiting = processingState.stage === 'waiting_for_approval';
   const canStart = apiKey && openAIKey && videoFile && !isProcessing && !isWaiting;
+
+  // Função para garantir que o clique funcione
+  const handleConfirm = () => {
+    console.log("Botão Confirmar Clicado!"); // Debug no console
+    if (resumeProcessing) {
+        resumeProcessing();
+    } else {
+        alert("Erro: Função de retomar não encontrada. Verifique se atualizou o ProjectContext.");
+    }
+  };
 
   return (
     <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
@@ -30,7 +41,7 @@ export const ControlPanel = () => {
         </div>
         <p className="text-green-400 mb-2">{' > '} {processingState.log}</p>
         
-        {/* MODO DE EDIÇÃO (Aparece só na revisão ou durante o processo para leitura) */}
+        {/* MODO DE EDIÇÃO */}
         {segments.length > 0 && (
           <div className="mt-4 border-t border-slate-700 pt-2">
             <div className="flex justify-between items-center mb-2">
@@ -68,8 +79,9 @@ export const ControlPanel = () => {
         {/* SE ESTIVER ESPERANDO APROVAÇÃO */}
         {isWaiting && (
            <button
-             onClick={resumeProcessing}
-             className="flex items-center justify-center gap-2 w-full py-4 rounded-lg font-bold text-lg bg-green-600 hover:bg-green-500 text-white shadow-lg shadow-green-900/50 animate-pulse"
+             type="button" // Importante para evitar submits acidentais
+             onClick={handleConfirm}
+             className="flex items-center justify-center gap-2 w-full py-4 rounded-lg font-bold text-lg bg-green-600 hover:bg-green-500 text-white shadow-lg shadow-green-900/50 animate-pulse cursor-pointer"
            >
              <CheckCircle /> CONFIRMAR E DUBLAR
            </button>
