@@ -1,7 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { SubtitleSegment } from "../types";
 
-const MODEL_LOGIC = 'gemini-2.5-flash';
+const MODEL_LOGIC = 'gemini-3-flash-preview';
 
 // Modelo solicitado pelo usuário via print/Python snippet
 const OPENAI_TTS_MODEL_PREFERRED = 'gpt-4o-mini-tts'; 
